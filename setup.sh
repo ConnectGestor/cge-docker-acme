@@ -106,7 +106,7 @@ echo ${DOCKER_PASSWORD} | docker login ${DOCKER_REGISTRY} --username ${DOCKER_US
 
 # Passo 3: Baixa o projeto e entra na pasta
 [ -d cge-docker-acme ] || git clone https://github.com/ConnectGestor/cge-docker-acme.git
-cd connectgestor-docker-acme
+cd cge-docker-acme
 if ! git diff-index --quiet HEAD -- ; then
   echo "Salvando alterações locais com git stash push"
   git stash push &> /dev/null
