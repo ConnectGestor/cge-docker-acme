@@ -88,8 +88,8 @@ fi
 [ -n "${DOCKER_REGISTRY}" ] && [ -n "${DOCKER_USER}" ] && [ -n "${DOCKER_PASSWORD}" ] && \
 echo ${DOCKER_PASSWORD} | docker login ${DOCKER_REGISTRY} --username ${DOCKER_USER} --password-stdin
  
-if [ -d cg-docker-acme ] && [ -f cg-docker-acme/docker-compose.yaml ] ; then
-  cd cg-docker-acme
+if [ -d cge-docker-acme ] && [ -f cge-docker-acme/docker-compose.yaml ] ; then
+  cd cge-docker-acme
 elif [ -f docker-compose.yaml ] ; then
   ## nothing to do, already here
   echo -n "" > /dev/null
