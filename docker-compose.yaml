@@ -117,7 +117,7 @@ services:
     restart: unless-stopped
 
   sidekick:
-    image: ghcr.io/ticketz-oss/ticketz-sidekick:latest
+    image: ghcr.io/connectgestor/connectgestor-sidekick:latest
     profiles: ["do-not-start"]
     env_file:
       - .env-backend
