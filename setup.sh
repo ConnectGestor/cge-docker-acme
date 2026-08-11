@@ -2,8 +2,8 @@
 
 # Função para mostrar a mensagem de uso
 show_usage() {
-    echo -e     "Uso: \n\n      curl -sSL https://raw.githubusercontent.com/ConnectGestor/cge-docker-acme/main/setup.sh | sudo bash -s [-b <branchname>] <frontend_host> <email>\n\n"
-    echo -e "Exemplo: \n\n      curl -sSL https://raw.githubusercontent.com/ConnectGestor/cge-docker-acme/main/setup.sh | sudo bash -s ticketz.exemplo.com.br email@exemplo.com.br\n\n"
+    echo -e     "Uso: \n\n      curl -sSL https://get.connectgestor.com | sudo bash -s [-b <branchname>] <frontend_host> <email>\n\n"
+    echo -e "Exemplo: \n\n      curl -sSL https://get.connectgestor.com | sudo bash -s app.exemplo.com.br email@exemplo.com.br\n\n"
 }
 
 # Função para mensagem em vermelho
@@ -99,6 +99,47 @@ CURFOLDER=${PWD}
 # Passo 2: Instala o docker / apenas se já não tiver instalado
 which docker > /dev/null || curl -sSL https://get.docker.com | sh
 
+# Passo 2.1: Garante que o userland-proxy do Docker está desabilitado
+# Sem isso, o docker-proxy mascara o IP real do cliente nos logs do nginx
+ensure_docker_no_userland_proxy() {
+  local cfg=/etc/docker/daemon.json
+  local needs_restart=0
+
+  if [ ! -f "$cfg" ]; then
+    echo '{"userland-proxy": false}' > "$cfg"
+    needs_restart=1
+  elif ! python3 -c "import json,sys; d=json.load(open('$cfg')); sys.exit(0 if d.get('userland-proxy') is False else 1)" 2>/dev/null; then
+    python3 - <<'PYEOF'
+import json
+cfg = '/etc/docker/daemon.json'
+try:
+    d = json.load(open(cfg))
+except Exception:
+    d = {}
+d['userland-proxy'] = False
+open(cfg, 'w').write(json.dumps(d, indent=2) + '\n')
+PYEOF
+    needs_restart=1
+  fi
+
+  if [ "$needs_restart" = "1" ]; then
+    echo "Configurando Docker para uso de iptables puro (sem userland-proxy)..."
+    systemctl restart docker
+    echo "Docker reiniciado."
+  fi
+}
+ensure_docker_no_userland_proxy
+
+# Garante que o arquivo de configuração do Docker exista
+ensure_docker_config() {
+  local cfg="$HOME/.docker/config.json"
+
+  if [ ! -f "$cfg" ]; then
+    mkdir -p "$(dirname "$cfg")"
+    echo '{}' > "$cfg"
+  fi
+}
+
 [ -f credentials.env ] && . credentials.env
  
 [ -n "${DOCKER_REGISTRY}" ] && [ -n "${DOCKER_USER}" ] && [ -n "${DOCKER_PASSWORD}" ] && \
@@ -147,6 +188,12 @@ cat example.env-frontend \
   | sed -e "s/^FRONTEND_HOST=.*/FRONTEND_HOST=$frontend_host/g" \
   | sed -e "s/^EMAIL_ADDRESS=.*/EMAIL_ADDRESS=$email/g" > .env-frontend
 
+cat >> .env-frontend << EOF
+
+SETUP_SYSTEM=get.connectgestor.com
+
+EOF
+
 ## inclui configuração para o acme-companion se o backend tiver host a parte
 [ -z "$backend_path" ] && cat >> .env-backend << EOF
 # Normalmente não é necessário alterar estes valores
@@ -159,7 +206,18 @@ EOF
 
 DIDRESTORE=""
 
+# Aplica migrações do docker-compose (ex.: docker.sock no backend)
+if [ -f migrations/run.py ]; then
+  echo "Verificando migrações do docker-compose"
+  python3 migrations/run.py --project-dir . || {
+    echo "Erro ao executar migrações do docker-compose"
+    echo -e "\n\nAlterações precisam ser verificadas manualmente, procure suporte se necessário\n\n"
+    exit 1
+  }
+fi
+
 ## baixa todos os componentes
+ensure_docker_config
 docker compose pull
 
 if [ -f ${CURFOLDER}/retrieved_data.tar.gz ]; then
@@ -179,14 +237,14 @@ if [ -f ${CURFOLDER}/retrieved_data.tar.gz ]; then
    if [ -f ${CURFOLDER}/public_data.tar.gz ]; then
       echo "Encontrado arquivo com dados para a pasta public, iniciando processo de restauração..."
       
-      docker volume create --name ticketz-docker-acme_backend_public &> ${tmplog}-createpublic.log
+      docker volume create --name cge-docker-acme_backend_public &> ${tmplog}-createpublic.log
       
       if [ $? -gt 0 ]; then
          echo -e "\n\nErro ao criar volume public\n\nLog de erros pode ser encontrado em ${tmplog}-createpublic.log\n\n"
          exit 1
       fi
       
-      cat ${CURFOLDER}/public_data.tar.gz | docker run -i --rm -v ticketz-docker-acme_backend_public:/public alpine ash -c "tar -xzf - -C /public" &> ${tmplog}-restorepublic.log
+      cat ${CURFOLDER}/public_data.tar.gz | docker run -i --rm -v cge-docker-acme_backend_public:/public alpine ash -c "tar -xzf - -C /public" &> ${tmplog}-restorepublic.log
 
       if [ $? -gt 0 ]; then
          echo -e "\n\nErro ao restaurar volume public\n\nLog de erros pode ser encontrado em ${tmplog}-restorepublic.log\n\n"
@@ -200,7 +258,7 @@ if [ -f ${CURFOLDER}/retrieved_data.tar.gz ]; then
 fi
 
 if ! [ "${DIDRESTORE}" ]; then
-    latest_backup_file=$(ls -t ${CURFOLDER}/ticketz-backup-*.tar.gz 2>/dev/null | head -n 1)
+    latest_backup_file=$(ls -t ${CURFOLDER}/ticketz-backup-*.tar.gz ${CURFOLDER}/cge-backup-*.tar.gz ${CURFOLDER}/connectgestor-backup-*.tar.gz 2>/dev/null | head -n 1)
 fi
 
 if [ -n "${latest_backup_file}" ] && ! [ -d "backups" ]; then

@@ -2,8 +2,8 @@
 
 # Função para mostrar a mensagem de uso
 show_usage() {
-    echo -e     "Uso: \n\n      curl -sSL https://raw.githubusercontent.com/ConnectGestor/cge-docker-acme/main/update.sh | sudo bash\n\n"
-    echo -e "Exemplo: \n\n      curl -sSL https://raw.githubusercontent.com/ConnectGestor/cge-docker-acme/main/update.sh | sudo bash\n\n"
+    echo -e     "Uso: \n\n      curl -sSL https://update.connectgestor.com | sudo bash\n\n"
+    echo -e "Exemplo: \n\n      curl -sSL https://update.connectgestor.com | sudo bash\n\n"
 }
 
 # Função para sair com erro
@@ -48,11 +48,11 @@ if [ -f docker-compose-acme.yaml ] && [ -f .env-backend-acme ] && [ -n "${BACKEN
    echored "  a partir de imagens pré compiladas do        "
    echored "  projeto ConnectGestor                        "
    echored "                                               "
-   echored "  Aguarde 20 segundos.                         "
+   echored "  Aguarde 20 segundos...                       "
    echored "                                               "
-   echored "  Aperte CTRL-C para cancelar                  "
+   echored "  ...ou aperte CTRL-C para cancelar            "
    echored "                                               "
-   sleep 20S
+   sleep 20
    echo "Prosseguindo..."
 
    docker compose -f docker-compose-acme.yaml down
@@ -75,7 +75,7 @@ if [ -f docker-compose-acme.yaml ] && [ -f .env-backend-acme ] && [ -n "${BACKEN
    else
      cd /home/${SUDO_USER} || exit 1
    fi
-   curl -sSL get.ticke.tz | bash -s -- -b ${BRANCH-main} ${FRONTEND_HOST} ${EMAIL_ADDRESS}
+   curl -sSL get.connectgestor.com | bash -s -- -b ${BRANCH-master} ${FRONTEND_HOST} ${EMAIL_ADDRESS}
 
    echo "Após os testes você pode remover os volumes antigos com o comando:"
    echo -e "\n\n    sudo docker volume rm ${BACKEND_PUBLIC_VOL} ${BACKEND_PRIVATE_VOL} ${POSTGRES_VOL}\n"
@@ -84,19 +84,29 @@ if [ -f docker-compose-acme.yaml ] && [ -f .env-backend-acme ] && [ -n "${BACKEN
 fi
 
 [ -f credentials.env ] && . credentials.env
- 
+
 [ -n "${DOCKER_REGISTRY}" ] && [ -n "${DOCKER_USER}" ] && [ -n "${DOCKER_PASSWORD}" ] && \
 echo ${DOCKER_PASSWORD} | docker login ${DOCKER_REGISTRY} --username ${DOCKER_USER} --password-stdin
- 
+
 if [ -d cge-docker-acme ] && [ -f cge-docker-acme/docker-compose.yaml ] ; then
   cd cge-docker-acme
 elif [ -f docker-compose.yaml ] ; then
   ## nothing to do, already here
   echo -n "" > /dev/null
 elif [ "${SUDO_USER}" = "root" ] ; then
-  cd /root/cge-docker-acme || exit 1
+  if [ -d /root/cge-docker-acme ] ; then
+    cd /root/cge-docker-acme || exit 1
+  else
+    echo "Diretório cge-docker-acme não encontrado"
+    exit 1
+  fi
 else
-  cd /home/${SUDO_USER}/cge-docker-acme || exit 1
+  if [ -d /home/${SUDO_USER}/cge-docker-acme ] ; then
+      cd /home/${SUDO_USER}/cge-docker-acme || exit 1
+  else
+      echo "Diretório cge-docker-acme não encontrado"
+      exit 1
+  fi
 fi
 
 echo "Working on $PWD/cge-docker-acme folder"
@@ -107,7 +117,7 @@ if ! [ -f docker-compose.yaml ] ; then
 fi
 
 if [ -n "${BRANCH}" ] ; then
-  if ! git diff-index --quiet HEAD -- ; then
+  if ! git diff --quiet; then
     echo "Salvando alterações locais com git stash push"
     git stash push &> /dev/null
   fi
@@ -124,12 +134,140 @@ if [ -n "${BRANCH}" ] ; then
       exit 1
     fi
   fi
-  echo "Trazendo updates da branch ${BRANCH}"
-  git pull &> /dev/null
 fi
 
+if git diff --quiet; then
+  echo "Trazendo updates da branch ${BRANCH}"
+  git pull &> /dev/null
+else
+  echored "                                               "
+  echored "  A T E N Ç Ã O                                "
+  echored "                                               "
+  echored "  Você tem alterações locais, isso impede a    "
+  echored "  obtenção de atualizações do repositório da   "
+  echored "  stack.                                       "
+  echored "                                               "
+  echored "  É aconselhado reverter para voltar a seguir  "
+  echored "  as configurações publicadas no projeto.      "
+  echored "                                               "
+  echored "  Aguarde 20 segundos para prosseguir...       "
+  echored "                                               "
+  echored "  ...ou Aperte CTRL-C para cancelar            "
+  echored "                                               "
+  sleep 20
+fi
+
+# Garante que o userland-proxy do Docker está desabilitado
+# Sem isso, o docker-proxy mascara o IP real do cliente nos logs do nginx
+ensure_docker_no_userland_proxy() {
+  local cfg=/etc/docker/daemon.json
+  local needs_restart=0
+
+  if [ ! -f "$cfg" ]; then
+    echo '{"userland-proxy": false}' > "$cfg"
+    needs_restart=1
+  elif ! python3 -c "import json,sys; d=json.load(open('$cfg')); sys.exit(0 if d.get('userland-proxy') is False else 1)" 2>/dev/null; then
+    python3 - <<'PYEOF'
+import json
+cfg = '/etc/docker/daemon.json'
+try:
+    d = json.load(open(cfg))
+except Exception:
+    d = {}
+d['userland-proxy'] = False
+open(cfg, 'w').write(json.dumps(d, indent=2) + '\n')
+PYEOF
+    needs_restart=1
+  fi
+
+  if [ "$needs_restart" = "1" ]; then
+    echo "Configurando Docker para uso de iptables puro (sem userland-proxy)..."
+    systemctl restart docker
+    echo "Docker reiniciado."
+  fi
+}
+ensure_docker_no_userland_proxy
+
+# Garante que o arquivo de configuração do Docker exista
+ensure_docker_config() {
+  local cfg="$HOME/.docker/config.json"
+
+  if [ ! -f "$cfg" ]; then
+    mkdir -p "$(dirname "$cfg")"
+    echo '{}' > "$cfg"
+  fi
+}
+
+# Garante que os arquivos .env tenham TZAUTOINSTALLER=1
+ensure_tzautoinstaller_env() {
+  local env_file="$1"
+
+  if [ ! -f "$env_file" ]; then
+    return 0
+  fi
+
+  if grep -qE '^TZAUTOINSTALLER=' "$env_file"; then
+    sed -i 's/^TZAUTOINSTALLER=.*/TZAUTOINSTALLER=1/' "$env_file"
+  else
+    echo 'TZAUTOINSTALLER=1' >> "$env_file"
+  fi
+}
+
+ensure_migrations_available() {
+  mkdir -p migrations
+
+  # Tenta obter a pasta migrations sempre da branch master do repositório remoto.
+  # Usa git fetch + FETCH_HEAD para funcionar mesmo em clones single-branch
+  # onde origin/master não existe. git archive extrai apenas a pasta migrations
+  # sem alterar o HEAD ou o working tree local.
+  if [ -d .git ]; then
+    if git fetch origin master --no-tags &>/dev/null; then
+      if git archive FETCH_HEAD -- migrations/ 2>/dev/null | tar -x -C . 2>/dev/null; then
+        echo "Scripts de migração atualizados"
+      fi
+    fi
+  fi
+
+  if ! [ -f migrations/run.py ]; then
+    echo "Não foi possível obter migrations/run.py"
+    echo "Verifique a conexão com a internet ou o acesso ao repositório."
+    exit 1
+  fi
+
+  # Fallback: cria a migração inicial localmente caso não esteja no repositório.
+  if ! [ -f migrations/001_backend_docker_socket_and_config.yaml ]; then
+    echo "Criando migração inicial localmente"
+    cat > migrations/001_backend_docker_socket_and_config.yaml <<'YAMLEOF'
+description: Adiciona docker.sock e configuração do Docker ao serviço backend
+check:
+  services:
+    backend:
+      volumes:
+        - contains: "/var/run/docker.sock:/var/run/docker.sock"
+        - contains: "~/.docker/config.json:/root/.docker/config.json"
+apply:
+  services:
+    backend:
+      volumes:
+        - "/var/run/docker.sock:/var/run/docker.sock:ro"
+        - "~/.docker/config.json:/root/.docker/config.json:ro"
+YAMLEOF
+  fi
+}
+
+ensure_tzautoinstaller_env .env-backend
+ensure_tzautoinstaller_env .env-frontend
+
+# Executa migrações para garantir que novos requisitos de configuração
+# estejam presentes no docker-compose.override.yaml, mesmo quando
+# alterações locais impedem o git pull.
+ensure_migrations_available
+
+echo "Verificando migrações do docker-compose"
+python3 migrations/run.py --project-dir . || show_error "Erro ao executar migrações do docker-compose"
 
 echo "Baixando novas imagens"
+ensure_docker_config
 docker compose pull || show_error "Erro ao baixar novas imagens"
 
 echo "Finalizando containers"
