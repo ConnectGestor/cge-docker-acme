@@ -63,20 +63,17 @@ else
 fi
 
 if [ ! -f "$DIR/.env" ]; then
-  SENHA="$(openssl rand -base64 18 | tr -d '/+=' | head -c 20)"
   cat > "$DIR/.env" <<EOF
 DOMAIN=$DOMINIO
 EMAIL=$EMAIL
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
 SEGREDO=$(openssl rand -hex 32)
 ADMIN_USUARIO=$EMAIL
-ADMIN_SENHA=$SENHA
-TOKEN_EMPRESA=$(openssl rand -hex 32)
-EMPRESA_NOME=$DOMINIO
+ADMIN_SENHA=123456
+TOKEN_EMPRESA=
+EMPRESA_NOME=
 EOF
   chmod 600 "$DIR/.env"
-  echo "Senha inicial: $SENHA"
-  echo "Guarde o token do computador que será impresso depois do start."
 fi
 
 cp "$ORIGEM/docker/docker-compose.yml" "$DIR/docker-compose.yml"
@@ -93,9 +90,8 @@ fi
 
 cd "$DIR"
 docker compose up -d --build
-TOKEN="$(grep '^TOKEN_EMPRESA=' .env | cut -d= -f2-)"
 echo
-echo "Nuvem no ar: https://$DOMINIO"
+echo "Nuvem no ar: https://$DOMINIO/admin"
 echo "Login: $(grep '^ADMIN_USUARIO=' .env | cut -d= -f2-)"
-echo "Token do computador (config.json nuvem.token): $TOKEN"
-echo "No computador: nuvem.url = https://$DOMINIO"
+echo "Senha: 123456"
+echo "Cadastre cada empresa nessa página. O token gerado vai no computador da loja."
